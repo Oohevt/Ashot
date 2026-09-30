@@ -400,13 +400,15 @@ final class ToolButton: NSButton {
   init(symbol: String, label: String?) {
     glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
       .withSymbolConfiguration(
-        NSImage.SymbolConfiguration(pointSize: 16, weight: .medium, scale: .medium)
+        // Beside a label the glyph is sized to the text's height so both share top and bottom.
+        NSImage.SymbolConfiguration(
+          pointSize: label == nil ? 16 : 13, weight: .medium, scale: .medium)
           .applying(NSImage.SymbolConfiguration(paletteColors: [.white])))
     text = label.map {
       NSAttributedString(
         string: $0,
         attributes: [
-          .foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+          .foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 13, weight: .medium),
         ])
     }
     super.init(frame: .zero)
@@ -440,8 +442,11 @@ final class ToolButton: NSButton {
       x += side + 6
     }
     if let text {
-      let size = text.size()
-      text.draw(at: CGPoint(x: x, y: (bounds.height - size.height) / 2))
+      // Centre the cap-height band, not the line box: the line box includes the
+      // descender, which pushes the label below the glyph's midline.
+      let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+      let baseline = bounds.midY - font.capHeight / 2
+      text.draw(at: CGPoint(x: x, y: baseline + font.descender))
     }
   }
 }
