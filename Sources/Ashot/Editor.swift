@@ -12,6 +12,10 @@ final class EditorModel: ObservableObject {
   @Published var selected: UUID?
   @Published var zoom: CGFloat = 0.5
   @Published var message = "拖动绘制；选择工具可移动或调整标注"
+  @Published var color: AnnotationColor = .red
+  @Published var lineWidth: Double = 4
+  /// Set by the canvas: opens an in-place text field. Nil until a canvas exists.
+  var textEditor: ((UUID?, CGPoint) -> Void)?
   init(
     image: CGImage, pixelsPerPoint: CGSize = CGSize(width: 1, height: 1),
     pasteboard: NSPasteboard = .general
@@ -66,29 +70,50 @@ final class EditorModel: ObservableObject {
     self.selected = nil
   }
   func editText(_ id: UUID? = nil, at point: CGPoint = .zero) {
-    let existing = id.flatMap { wanted in history.annotations.first { $0.id == wanted } }
-    let alert = NSAlert()
-    alert.messageText = existing == nil ? "添加文字" : "修改文字"
-    alert.informativeText = "支持中文输入；确认后可用选择工具移动。"
-    let input = NSTextField(string: existing?.text ?? "")
-    input.frame = CGRect(x: 0, y: 0, width: 360, height: 28)
-    alert.accessoryView = input
-    alert.addButton(withTitle: "确认")
-    alert.addButton(withTitle: "取消")
-    alert.window.initialFirstResponder = input
-    guard alert.runModal() == .alertFirstButtonReturn, !input.stringValue.isEmpty else { return }
+    let start = id.flatMap { wanted in history.annotations.first { $0.id == wanted } }
+      .map { CGPoint(x: $0.x, y: $0.y) } ?? point
+    textEditor?(id, start)
+  }
+  /// Called by the canvas when in-place editing ends with a non-empty string.
+  func commitText(_ id: UUID?, at point: CGPoint, string: String) {
     var list = history.annotations
-    if var existing, let index = list.firstIndex(where: { $0.id == existing.id }) {
-      existing.text = input.stringValue
-      list[index] = existing
-      selected = existing.id
+    if let id, let index = list.firstIndex(where: { $0.id == id }) {
+      list[index].text = string
+      Self.fit(&list[index])
+      selected = id
     } else {
-      let a = Annotation(
-        kind: .text, start: point, end: CGPoint(x: point.x + 300, y: point.y + 40),
-        text: input.stringValue)
+      var a = Annotation(
+        kind: .text, start: point, end: point, text: string, color: color, width: lineWidth)
+      Self.fit(&a)
       list.append(a)
       selected = a.id
     }
+    commit(list)
+  }
+  /// A text annotation's box follows its content, so selection and hit-testing match the ink.
+  static func fit(_ a: inout Annotation) {
+    guard a.kind == .text else { return }
+    let size = AnnotationRenderer.textSize(a.text, width: a.width)
+    a.endX = a.x + size.width
+    a.endY = a.y + size.height
+  }
+  /// Applies to the selected annotation if there is one, and to everything drawn next.
+  func setColor(_ value: AnnotationColor) {
+    color = value
+    restyleSelected { if $0.kind != .mosaic { $0.color = value } }
+  }
+  func setWidth(_ value: Double) {
+    lineWidth = value
+    restyleSelected {
+      $0.width = value
+      Self.fit(&$0)
+    }
+  }
+  private func restyleSelected(_ change: (inout Annotation) -> Void) {
+    guard let selected, var list = Optional(history.annotations),
+      let index = list.firstIndex(where: { $0.id == selected }), true
+    else { return }
+    change(&list[index])
     commit(list)
   }
 }
@@ -96,23 +121,49 @@ struct EditorRoot: View {
   @ObservedObject var model: EditorModel
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
-        Button("选择") { model.tool = nil }
-        ForEach(AnnotationKind.allCases, id: \.self) { kind in
-          Button(title(kind)) { model.tool = kind }.tint(
-            model.tool == kind ? .accentColor : .secondary)
+      HStack(spacing: 10) {
+        HStack(spacing: 2) {
+          toolButton("选择", "cursorarrow", nil)
+          ForEach(AnnotationKind.allCases, id: \.self) { kind in
+            toolButton(title(kind), symbol(kind), kind)
+          }
         }
         Divider().frame(height: 20)
-        Button("撤销") { model.undo() }.disabled(!model.history.canUndo).keyboardShortcut("z")
-        Button("重做") { model.redo() }.disabled(!model.history.canRedo).keyboardShortcut(
-          "z", modifiers: [.command, .shift])
-        Button("删除") { model.removeSelected() }.disabled(model.selected == nil)
-        Button("修改文字") { model.editText(model.selected) }.disabled(
-          !model.history.annotations.contains { $0.id == model.selected && $0.kind == .text })
-        Spacer()
-        Button("保存") { model.save() }.keyboardShortcut("s")
-        Button("复制") { model.copy() }.keyboardShortcut("c")
-      }.padding(12)
+        HStack(spacing: 6) {
+          ForEach(AnnotationColor.allCases, id: \.self) { c in
+            Button { model.setColor(c) } label: {
+              Circle().fill(Color(nsColor: c.nsColor)).frame(width: 16, height: 16)
+                .overlay(Circle().stroke(Color.primary.opacity(0.35), lineWidth: 1))
+                .overlay(
+                  Circle().stroke(Color.accentColor, lineWidth: 2).frame(width: 22, height: 22)
+                    .opacity(model.color == c ? 1 : 0))
+                .frame(width: 24, height: 24)
+            }.buttonStyle(.plain).help(colorName(c))
+          }
+        }
+        Picker("粗细", selection: Binding(get: { model.lineWidth }, set: { model.setWidth($0) })) {
+          Text("细").tag(2.0)
+          Text("中").tag(4.0)
+          Text("粗").tag(8.0)
+        }.pickerStyle(.segmented).labelsHidden().frame(width: 96).help("线条粗细 / 文字大小")
+        Divider().frame(height: 20)
+        HStack(spacing: 2) {
+          iconAction("撤销  ⌘Z", "arrow.uturn.backward") { model.undo() }
+            .disabled(!model.history.canUndo).keyboardShortcut("z")
+          iconAction("重做  ⇧⌘Z", "arrow.uturn.forward") { model.redo() }
+            .disabled(!model.history.canRedo).keyboardShortcut("z", modifiers: [.command, .shift])
+          iconAction("删除选中标注", "trash") { model.removeSelected() }
+            .disabled(model.selected == nil)
+          iconAction("修改文字（也可双击文字）", "pencil") {
+            model.editText(model.selected)
+          }.disabled(!model.history.annotations.contains { $0.id == model.selected && $0.kind == .text })
+        }
+        Spacer(minLength: 8)
+        Button { model.save() } label: { Label("保存", systemImage: "square.and.arrow.down") }
+          .keyboardShortcut("s").fixedSize()
+        Button { model.copy() } label: { Label("复制", systemImage: "doc.on.doc") }
+          .keyboardShortcut("c").buttonStyle(.borderedProminent).fixedSize()
+      }.padding(.horizontal, 12).padding(.vertical, 10)
       Divider()
       CanvasHost(model: model)
       Divider()
@@ -123,14 +174,52 @@ struct EditorRoot: View {
         Slider(value: $model.zoom, in: 0.1...1).frame(width: 100)
         Text("\(Int(model.zoom*100))%").frame(width: 44)
       }.font(.caption).padding(10)
-    }.frame(minWidth: 880, minHeight: 480)
+    }.frame(minWidth: 840, minHeight: 480)
+  }
+  func toolButton(_ name: String, _ symbol: String, _ kind: AnnotationKind?) -> some View {
+    let active = model.tool == kind
+    return Button { model.tool = kind } label: {
+      glyph(symbol).frame(width: 30, height: 26)
+        .background(active ? Color.accentColor.opacity(0.22) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .foregroundStyle(active ? Color.accentColor : Color.primary)
+    }.buttonStyle(.plain).help(name).accessibilityLabel(name)
+  }
+  /// "textformat" is localized by SF Symbols into the two characters 格式 on Chinese systems.
+  @ViewBuilder func glyph(_ symbol: String) -> some View {
+    if symbol == "textformat" {
+      Text("T").font(.system(size: 16, weight: .bold, design: .serif))
+    } else {
+      Image(systemName: symbol)
+    }
+  }
+  func iconAction(_ name: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {
+    Button(action: action) { Image(systemName: symbol).frame(width: 30, height: 26) }
+      .buttonStyle(.plain).help(name).accessibilityLabel(name)
+  }
+  func symbol(_ k: AnnotationKind) -> String {
+    switch k {
+    case .rectangle: return "rectangle"
+    case .arrow: return "arrow.up.right"
+    case .text: return "textformat"
+    case .mosaic: return "square.grid.3x3.fill"
+    }
+  }
+  func colorName(_ c: AnnotationColor) -> String {
+    switch c {
+    case .red: return "红"
+    case .yellow: return "黄"
+    case .green: return "绿"
+    case .blue: return "蓝"
+    case .white: return "白"
+    case .black: return "黑"
+    }
   }
   func title(_ k: AnnotationKind) -> String {
     switch k {
     case .rectangle: return "矩形"
     case .arrow: return "箭头"
     case .text: return "文字"
-    case .cover: return "遮盖"
+    case .mosaic: return "马赛克"
     }
   }
 }
@@ -151,17 +240,20 @@ struct CanvasHost: NSViewRepresentable {
     canvas.needsDisplay = true
   }
 }
-final class CanvasView: NSView {
+final class CanvasView: NSView, NSTextFieldDelegate {
   let model: EditorModel
   var start: CGPoint?
   var draft: Annotation?
   var original: [Annotation]?
   var resize = false
+  var field: NSTextField?
+  var editing: (id: UUID?, point: CGPoint)?
   override var isFlipped: Bool { true }
   override var acceptsFirstResponder: Bool { true }
   init(model: EditorModel) {
     self.model = model
     super.init(frame: .zero)
+    model.textEditor = { [weak self] id, point in self?.beginText(id, at: point) }
   }
   required init?(coder: NSCoder) { fatalError() }
   func point(_ event: NSEvent) -> CGPoint {
@@ -175,10 +267,19 @@ final class CanvasView: NSView {
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
     ctx.saveGState()
     ctx.scaleBy(x: model.zoom, y: model.zoom)
-    for a in model.history.annotations where a.id != draft?.id {
-      AnnotationRenderer.draw(a, in: ctx)
+    for a in model.history.annotations where a.id != draft?.id && a.id != editing?.id {
+      AnnotationRenderer.draw(a, in: ctx, base: model.image)
     }
-    if let draft { AnnotationRenderer.draw(draft, in: ctx) }
+    if let draft {
+      AnnotationRenderer.draw(draft, in: ctx, base: model.image)
+      // The mosaic has no stroke of its own; show its region while dragging.
+      if draft.kind == .mosaic {
+        ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        ctx.setLineWidth(1.5 / model.zoom)
+        ctx.setLineDash(phase: 0, lengths: [6 / model.zoom, 4 / model.zoom])
+        ctx.stroke(draft.rect)
+      }
+    }
     if let selected = model.selected,
       let a = model.history.annotations.first(where: { $0.id == selected })
     {
@@ -191,7 +292,58 @@ final class CanvasView: NSView {
     }
     ctx.restoreGState()
   }
+  // MARK: In-place text
+  func beginText(_ id: UUID?, at point: CGPoint) {
+    finishText(commit: true)
+    let existing = id.flatMap { wanted in model.history.annotations.first { $0.id == wanted } }
+    let width = existing?.width ?? model.lineWidth
+    let f = NSTextField(string: existing?.text ?? "")
+    f.isBordered = false
+    f.drawsBackground = false
+    f.focusRingType = .none
+    f.font = .systemFont(
+      ofSize: AnnotationRenderer.fontSize(width: width) * model.zoom, weight: .semibold)
+    f.textColor = (existing?.color ?? model.color).nsColor
+    f.placeholderString = "输入文字，回车确认"
+    f.delegate = self
+    f.frame = CGRect(
+      x: point.x * model.zoom, y: point.y * model.zoom, width: 160,
+      height: f.intrinsicContentSize.height)
+    fitField(f)
+    addSubview(f)
+    field = f
+    editing = (id, point)
+    window?.makeFirstResponder(f)
+    needsDisplay = true
+  }
+  private func fitField(_ f: NSTextField) {
+    let text = f.stringValue.isEmpty ? "输入文字，回车确认" : f.stringValue
+    let w = (text as NSString).size(withAttributes: [.font: f.font as Any]).width
+    f.frame.size.width = max(80, ceil(w) + 24)
+  }
+  func finishText(commit: Bool) {
+    guard let f = field, let target = editing else { return }
+    field = nil
+    editing = nil
+    let string = f.stringValue
+    f.removeFromSuperview()
+    if commit, !string.isEmpty { model.commitText(target.id, at: target.point, string: string) }
+    window?.makeFirstResponder(self)
+    needsDisplay = true
+  }
+  func controlTextDidChange(_ notification: Notification) {
+    if let f = field { fitField(f) }
+  }
+  func controlTextDidEndEditing(_ notification: Notification) { finishText(commit: true) }
+  func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+    if selector == #selector(NSResponder.cancelOperation(_:)) {
+      finishText(commit: false)
+      return true
+    }
+    return false
+  }
   override func mouseDown(with event: NSEvent) {
+    finishText(commit: true)
     window?.makeFirstResponder(self)
     let p = point(event)
     start = p
@@ -201,7 +353,8 @@ final class CanvasView: NSView {
         start = nil
         return
       }
-      draft = Annotation(kind: tool, start: p, end: p)
+      draft = Annotation(
+        kind: tool, start: p, end: p, color: model.color, width: model.lineWidth)
     } else {
       let found = model.history.annotations.reversed().first {
         $0.rect.insetBy(dx: -14, dy: -14).contains(p)

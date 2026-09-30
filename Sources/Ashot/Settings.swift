@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import ServiceManagement
 import SwiftUI
 
@@ -44,9 +45,31 @@ struct SettingsView: View {
   let controller: AppController
   @State private var note = ""
   @State private var status = AppSettings.loginItemStatus
+  @State private var key = HotKey.defaultKey
+  @State private var modifiers = HotKey.defaultModifiers
+  @State private var shortcutNote = ""
 
   var body: some View {
     Form {
+      Section {
+        HStack {
+          Picker("修饰键", selection: $modifiers) {
+            Text("⌥").tag(UInt32(optionKey))
+            Text("⌃ ⇧").tag(UInt32(controlKey | shiftKey))
+            Text("⌘ ⇧").tag(UInt32(cmdKey | shiftKey))
+            Text("⌃ ⌥").tag(UInt32(controlKey | optionKey))
+          }.frame(width: 160)
+          Picker("按键", selection: $key) {
+            ForEach(controller.hotKey.choices, id: \.1) { item in Text(item.0).tag(item.1) }
+          }.frame(width: 140)
+          Spacer()
+          Button("应用") { applyShortcut() }
+        }
+        if !shortcutNote.isEmpty {
+          Text(shortcutNote).font(.caption).foregroundStyle(.secondary)
+        }
+      } header: { Text("截图快捷键") }
+
       Section {
         Toggle(
           isOn: Binding(
@@ -71,8 +94,30 @@ struct SettingsView: View {
       if !note.isEmpty { Text(note).font(.caption).foregroundStyle(.orange) }
     }
     .formStyle(.grouped)
-    .frame(minWidth: 470, minHeight: 320)
-    .onAppear { status = AppSettings.loginItemStatus }
+    .frame(minWidth: 470, minHeight: 420)
+    .onAppear {
+      status = AppSettings.loginItemStatus
+      if controller.hotKey.currentKey == nil {
+        shortcutNote = "快捷键注册失败。请解决冲突后点击“应用”，或换一个组合。"
+      }
+      if UserDefaults.standard.object(forKey: "hotKeyCode") != nil {
+        key = UInt32(UserDefaults.standard.integer(forKey: "hotKeyCode"))
+      }
+      let mods = UserDefaults.standard.integer(forKey: "hotKeyModifiers")
+      if mods != 0 { modifiers = UInt32(mods) }
+    }
+  }
+
+  private func applyShortcut() {
+    record("shortcutApplyRequested", ["key": key, "modifiers": modifiers])
+    if controller.hotKey.register(key: key, modifiers: modifiers) {
+      UserDefaults.standard.set(Int(key), forKey: "hotKeyCode")
+      UserDefaults.standard.set(Int(modifiers), forKey: "hotKeyModifiers")
+      shortcutNote = "快捷键已保存"
+      record("shortcutStored", ["key": key, "modifiers": modifiers])
+    } else {
+      shortcutNote = "快捷键被占用，请选择其他组合"
+    }
   }
 
   private func changeLaunchAtLogin(_ on: Bool) {

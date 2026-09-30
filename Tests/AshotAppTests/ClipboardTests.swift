@@ -35,9 +35,10 @@ final class ClipboardTests: XCTestCase {
     let pasteboard = NSPasteboard.withUniqueName()
     defer { pasteboard.releaseGlobally() }
     let model = EditorModel(image: whiteImage(), pasteboard: pasteboard)
-    let index = (25 * 100 + 25) * 4
+    let index = (25 * 100 + 10) * 4  // on the rectangle's left edge
     model.commit([
-      Annotation(kind: .cover, start: CGPoint(x: 10, y: 10), end: CGPoint(x: 50, y: 50))
+      Annotation(
+        kind: .rectangle, start: CGPoint(x: 10, y: 10), end: CGPoint(x: 50, y: 50), color: .black)
     ])
     XCTAssertEqual(Array(try read(pasteboard).bytes[index..<index + 4]), [0, 0, 0, 255])
     model.undo()
@@ -57,7 +58,7 @@ final class ClipboardTests: XCTestCase {
       XCTAssertEqual(decoded.size.height, 40, accuracy: 0.05)
     }
     try check()
-    model.commit([Annotation(kind: .cover, start: .zero, end: CGPoint(x: 10, y: 10))])
+    model.commit([Annotation(kind: .rectangle, start: .zero, end: CGPoint(x: 10, y: 10))])
     try check()
     model.undo()
     try check()

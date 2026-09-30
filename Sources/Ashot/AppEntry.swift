@@ -44,7 +44,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let menu = NSMenu()
     menu.addItem(withTitle: "区域截图", action: #selector(startCapture), keyEquivalent: "").target =
       self
-    menu.addItem(withTitle: "窗口截图…", action: #selector(pickWindow), keyEquivalent: "").target = self
     menu.addItem(withTitle: "打开 Ashot", action: #selector(showHome), keyEquivalent: "").target =
       self
     menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: "").target =
@@ -116,7 +115,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
   @objc func showHome() {
     if home == nil {
       home = NSWindow(
-        contentRect: CGRect(x: 0, y: 0, width: 520, height: 390),
+        contentRect: CGRect(x: 0, y: 0, width: 520, height: 330),
         styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
       home.title = "Ashot"
       home.isReleasedWhenClosed = false
@@ -134,7 +133,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
   @objc func showSettings() {
     if settingsWindow == nil {
       let window = NSWindow(
-        contentRect: CGRect(x: 0, y: 0, width: 470, height: 320),
+        contentRect: CGRect(x: 0, y: 0, width: 470, height: 420),
         styleMask: [.titled, .closable], backing: .buffered, defer: false)
       window.title = "Ashot · 设置"
       window.isReleasedWhenClosed = false
@@ -283,32 +282,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     controller.start()
   }
-  @objc func pickWindow() {
-    guard !busy, longController == nil else { return }
-    Task {
-      do {
-        let content = try await captureService.content()
-        let windows = content.windows.filter {
-          $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier
-            && $0.frame.width > 100 && $0.frame.height > 100
-        }
-        let alert = NSAlert()
-        alert.messageText = "选择要截取的窗口"
-        alert.addButton(withTitle: "截图")
-        alert.addButton(withTitle: "取消")
-        let popup = NSPopUpButton(frame: CGRect(x: 0, y: 0, width: 420, height: 30))
-        popup.addItems(
-          withTitles: windows.map {
-            ($0.owningApplication?.applicationName ?? "窗口") + " · " + ($0.title ?? "无标题")
-          })
-        alert.accessoryView = popup
-        guard !windows.isEmpty, alert.runModal() == .alertFirstButtonReturn else { return }
-        let image = try await captureService.windowImage(windows[popup.indexOfSelectedItem])
-        openEditor(image)
-        record("windowCapture")
-      } catch { presentError(error.localizedDescription) }
-    }
-  }
   @objc func quit() {
     longController?.cancel()
     cleanup()
@@ -317,55 +290,22 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 struct HomeView: View {
   let controller: AppController
-  @State var key = HotKey.defaultKey
-  @State var modifiers = HotKey.defaultModifiers
-  @State var message = ""
   var body: some View {
-    VStack(alignment: .leading, spacing: 18) {
+    VStack(alignment: .leading, spacing: 16) {
       Label("Ashot", systemImage: "viewfinder").font(.largeTitle.bold())
       Text("截图、标注和长截图，在本机完成。").foregroundStyle(.secondary)
       HStack {
         Button("区域截图") { controller.startCapture() }.buttonStyle(.borderedProminent)
-        Button("窗口截图…") { controller.pickWindow() }
         Button("屏幕权限") { controller.requestScreenAccess() }
         Button("设置…") { controller.showSettings() }
       }
-      Text("长截图：先框选可滚动的静态内容，再点“长截图”。缓慢向下滚动，完成后继续标注。")
       Divider()
-      HStack {
-        Text("截图快捷键")
-        Picker("修饰键", selection: $modifiers) {
-          Text("⌥").tag(UInt32(optionKey))
-          Text("⌃ ⇧").tag(UInt32(controlKey | shiftKey))
-          Text("⌘ ⇧").tag(UInt32(cmdKey | shiftKey))
-          Text("⌃ ⌥").tag(UInt32(controlKey | optionKey))
-        }.labelsHidden().frame(width: 90)
-        Picker("按键", selection: $key) {
-          ForEach(controller.hotKey.choices, id: \.1) { item in Text(item.0).tag(item.1) }
-        }.labelsHidden().frame(width: 70)
-        Button("应用") {
-          record("shortcutApplyRequested", ["key": key, "modifiers": modifiers])
-          if controller.hotKey.register(key: key, modifiers: modifiers) {
-            UserDefaults.standard.set(Int(key), forKey: "hotKeyCode")
-            UserDefaults.standard.set(Int(modifiers), forKey: "hotKeyModifiers")
-            message = "快捷键已保存"
-            record("shortcutStored", ["key": key, "modifiers": modifiers])
-          } else {
-            message = "快捷键被占用，请选择其他组合"
-          }
-        }
-      }
-      Text(message).font(.caption).foregroundStyle(.secondary)
-      Text("框选后按 W 直接复制到剪贴板并关闭；按 Enter 或点“编辑截图”进入标注。Esc 取消。").font(.caption).foregroundStyle(
-        .secondary)
-      Text("标注、撤销和重做后自动更新剪贴板，可直接 ⌘ V 粘贴。").font(.caption).foregroundStyle(.secondary)
-    }.padding(28).frame(width: 520, height: 390)
-      .onAppear {
-        if controller.hotKey.currentKey == nil { message = "快捷键注册失败。请解决冲突后点击“应用”，或换一个组合。" }
-        let stored = UserDefaults.standard.integer(forKey: "hotKeyCode")
-        if UserDefaults.standard.object(forKey: "hotKeyCode") != nil { key = UInt32(stored) }
-        let mods = UserDefaults.standard.integer(forKey: "hotKeyModifiers")
-        if mods != 0 { modifiers = UInt32(mods) }
-      }
+      VStack(alignment: .leading, spacing: 6) {
+        Text("框选：鼠标悬停在窗口、菜单栏上会高亮，单击直接选中；也可拖动自由框选，框完还能拖边拖角调整。")
+        Text("框选后：W 复制 · ⌘S 保存 · Enter 进入标注 · Esc 取消。")
+        Text("长截图：框选可滚动的静态内容，点“长截图”后缓慢向下滚动。")
+        Text("标注、撤销和重做后自动更新剪贴板，可直接 ⌘ V 粘贴。")
+      }.font(.callout).foregroundStyle(.secondary)
+    }.padding(28).frame(width: 520)
   }
 }

@@ -30,7 +30,7 @@ final class RenderingTests: XCTestCase {
     let source = try XCTUnwrap(ctx.makeImage())
     let rendered = try AnnotationRenderer.render(
       base: source,
-      annotations: [Annotation(kind: .cover, start: .zero, end: CGPoint(x: 10, y: 10))])
+      annotations: [Annotation(kind: .rectangle, start: .zero, end: CGPoint(x: 10, y: 10))])
     XCTAssertEqual(rendered.colorSpace?.name, source.colorSpace?.name)
     let before = try XCTUnwrap(source.dataProvider?.data) as Data
     let after = try XCTUnwrap(rendered.dataProvider?.data) as Data
@@ -39,17 +39,20 @@ final class RenderingTests: XCTestCase {
     XCTAssertEqual(
       Array(before[sourceIndex..<sourceIndex + 4]), Array(after[outputIndex..<outputIndex + 4]))
   }
-  func testOpaqueCoverFlattensAtCorrectTopLeftCoordinates() throws {
+  func testStrokeLandsAtTopLeftCoordinatesNotMirrored() throws {
     let image = try AnnotationRenderer.render(
       base: base(),
       annotations: [
-        Annotation(kind: .cover, start: CGPoint(x: 10, y: 20), end: CGPoint(x: 60, y: 50))
+        Annotation(
+          kind: .rectangle, start: CGPoint(x: 10, y: 20), end: CGPoint(x: 60, y: 50),
+          color: .black)
       ])
     let raster = try Raster(image)
-    let covered = (30 * 200 + 30) * 4
-    let uncovered = (130 * 200 + 30) * 4
-    XCTAssertEqual(Array(raster.bytes[covered..<covered + 4]), [0, 0, 0, 255])
-    XCTAssertEqual(Array(raster.bytes[uncovered..<uncovered + 4]), [255, 255, 255, 255])
+    // Top edge of the rectangle is at y = 20 (from the top); the mirrored row is 160 - 20.
+    let onEdge = (20 * 200 + 30) * 4
+    let mirrored = (140 * 200 + 30) * 4
+    XCTAssertEqual(Array(raster.bytes[onEdge..<onEdge + 4]), [0, 0, 0, 255])
+    XCTAssertEqual(Array(raster.bytes[mirrored..<mirrored + 4]), [255, 255, 255, 255])
   }
   func testRectangleAndArrowAffectExpectedRegion() throws {
     let image = try AnnotationRenderer.render(

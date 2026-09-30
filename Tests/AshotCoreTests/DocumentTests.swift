@@ -12,7 +12,7 @@ final class DocumentTests: XCTestCase {
     history.redo()
     XCTAssertEqual(history.annotations, [a])
     history.undo()
-    history.commit([Annotation(kind: .cover, start: .zero, end: CGPoint(x: 5, y: 5))])
+    history.commit([Annotation(kind: .rectangle, start: .zero, end: CGPoint(x: 5, y: 5))])
     XCTAssertFalse(history.canRedo)
   }
   func testMovePreservesDimensions() {

@@ -50,21 +50,6 @@ final class CaptureService {
       contentFilter: filter, configuration: config)
     return CaptureSnapshot(image: image, display: display, screen: screen, content: content)
   }
-  func windowImage(_ window: SCWindow) async throws -> CapturedImage {
-    let filter = SCContentFilter(desktopIndependentWindow: window)
-    let config = SCStreamConfiguration()
-    config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
-    config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
-    config.showsCursor = false
-    config.ignoreShadowsSingleWindow = true
-    let image = try await SCScreenshotManager.captureImage(
-      contentFilter: filter, configuration: config)
-    return CapturedImage(
-      image: image,
-      pixelsPerPoint: CGSize(
-        width: CGFloat(image.width) / window.frame.width,
-        height: CGFloat(image.height) / window.frame.height))
-  }
 }
 final class OverlayWindow: NSWindow {
   override var canBecomeKey: Bool { true }
