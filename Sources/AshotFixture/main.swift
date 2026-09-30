@@ -8,6 +8,7 @@ app.delegate = delegate
 app.run()
 final class FixtureDelegate: NSObject, NSApplicationDelegate {
   var window: NSWindow!
+  var dialog: NSPanel?
   var scroll: NSScrollView!
   var imageView: NSImageView!
   var dynamicView: NSView?
@@ -46,6 +47,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
       ("回到顶部", #selector(top), "t"), ("跳到底部", #selector(bottom), "b"),
       ("切换动态干扰", #selector(dynamic), "d"),
       ("恢复测试窗口", #selector(restoreLayout), "r"),
+      ("独立对话框", #selector(toggleDialog), "j"),
     ] { sub.addItem(withTitle: title, action: action, keyEquivalent: key).target = self }
     app.mainMenu = menu
     window.makeKeyAndOrderFront(nil)
@@ -92,6 +94,28 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
   @objc func bottom() {
     scroll.contentView.scroll(to: CGPoint(x: 0, y: 0))
     scroll.reflectScrolledClipView(scroll.contentView)
+  }
+  /// A separate floating panel so hover-selection of an "independent dialog"
+  /// can be exercised without touching the scrolled document window.
+  @objc func toggleDialog() {
+    if let dialog {
+      dialog.close()
+      self.dialog = nil
+      return
+    }
+    let panel = NSPanel(
+      contentRect: CGRect(x: 640, y: 420, width: 320, height: 150),
+      styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.title = "独立对话框"
+    panel.isFloatingPanel = true
+    panel.level = .floating
+    panel.isReleasedWhenClosed = false
+    let label = NSTextField(
+      labelWithString: "这是一个独立于主窗口的悬浮对话框，\n用于验证悬停自动框选。")
+    label.frame = CGRect(x: 20, y: 45, width: 280, height: 60)
+    panel.contentView?.addSubview(label)
+    panel.orderFrontRegardless()
+    dialog = panel
   }
   @objc func dynamic() {
     if let dynamicView {

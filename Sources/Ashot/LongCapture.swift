@@ -17,13 +17,16 @@ final class LongReceiver: NSObject, SCStreamOutput, @unchecked Sendable {
   private var pixelsPerPoint = CGSize(width: 1, height: 1)
   private var onUpdate: (@Sendable (Int, Int, CGImage?) -> Void)?
   private var onError: (@Sendable (String) -> Void)?
+  private var onHint: (@Sendable (String) -> Void)?
   func configure(
     update: @escaping @Sendable (Int, Int, CGImage?) -> Void,
+    hint: @escaping @Sendable (String) -> Void,
     error: @escaping @Sendable (String) -> Void
   ) {
     queue.async {
       self.onUpdate = update
       self.onError = error
+      self.onHint = hint
     }
   }
   /// Frames arrive as the whole window, so the selected region is cut out here.
@@ -83,6 +86,13 @@ final class LongReceiver: NSObject, SCStreamOutput, @unchecked Sendable {
       }
     } catch {
       recordFrame()
+      // A frame that simply does not line up (scrolled past the overlap, or mid
+      // animation) is skipped: the last accepted frame is still the reference, so
+      // slowing down or scrolling back resumes on its own without pressing retry.
+      if case StitchError.unaligned = error {
+        onHint?("滚动太快或内容在变化。放慢一点，或回滚到刚才的位置，会自动继续。")
+        return
+      }
       paused = true
       let text: String
       switch error {
@@ -182,6 +192,12 @@ final class LongCaptureController: NSObject, ObservableObject, SCStreamDelegate 
           record("longAppend", ["height": height, "frames": count])
         }
       },
+      hint: { [weak self] message in
+        DispatchQueue.main.async {
+          guard let self, !self.ended, !self.paused else { return }
+          self.message = message
+        }
+      },
       error: { [weak self] message in
         DispatchQueue.main.async {
           guard let self, !self.ended else { return }
@@ -202,13 +218,26 @@ final class LongCaptureController: NSObject, ObservableObject, SCStreamDelegate 
         let container = snapshot.display.frame
         let globalCenter = Geometry.globalPoint(
           CGPoint(x: rect.midX, y: rect.midY), in: container)
-        watchedWindow = content.windows.first {
-          $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier
-            && $0.windowLayer == 0 && $0.frame.contains(globalCenter)
-        }
         let globalRect = Geometry.globalRect(rect, in: container)
-        guard let target = watchedWindow, target.frame.width > 0, target.frame.height > 0,
-          let localRect = Geometry.windowLocalRect(global: globalRect, window: target.frame)
+        // content.windows is not in z-order: the first hit under the point could be a
+        // larger window behind the one the user selected. Prefer the frontmost window
+        // that holds the whole selection, then the frontmost under its center.
+        let (order, _) = SmartSelection.onScreenWindows()
+        let pool = content.windows.filter {
+          $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier
+            && $0.windowLayer == 0 && $0.frame.width > 0 && $0.frame.height > 0
+        }
+        func front(_ list: [SCWindow]) -> SCWindow? {
+          list.min { (order[Int($0.windowID)] ?? .max) < (order[Int($1.windowID)] ?? .max) }
+        }
+        watchedWindow =
+          front(pool.filter { $0.frame.contains(globalRect) })
+          ?? front(pool.filter { $0.frame.contains(globalCenter) })
+        // A selection that pokes out of its window (dragged past the edge, or a
+        // handle adjustment) is clipped to the window instead of refused.
+        guard let target = watchedWindow,
+          let localRect = Geometry.windowLocalRect(
+            global: globalRect.intersection(target.frame), window: target.frame)
         else {
           message = "请框选单个窗口内的可滚动内容。当前区域超出窗口，请取消后重选。"
           paused = true
@@ -224,7 +253,7 @@ final class LongCaptureController: NSObject, ObservableObject, SCStreamDelegate 
         let config = SCStreamConfiguration()
         config.showsCursor = false
         config.ignoreShadowsSingleWindow = true
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 5)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
         config.queueDepth = 3
         // ScreenCaptureKit ignores sourceRect for single-window capture and always
         // delivers the window's full bounds, so the region is cropped per frame.

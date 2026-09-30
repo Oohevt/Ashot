@@ -28,6 +28,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var previousApp: NSRunningApplication?
   var longController: LongCaptureController?
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // Two instances would share the hotkey and stack two overlays, the top one
+    // swallowing clicks. The newest launch replaces any older one, so a fresh
+    // dev build also supersedes the login-item copy in /Applications.
+    let others = NSRunningApplication.runningApplications(
+      withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.oohevt.Ashot"
+    ).filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    others.forEach { $0.terminate() }
+    for _ in 0..<20 where others.contains(where: { !$0.isTerminated }) {
+      RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+    }
     status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     status.button?.image = NSImage(
       systemSymbolName: "viewfinder", accessibilityDescription: "Ashot 截图")
@@ -168,7 +178,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
       do {
         let snapshot = try await captureService.screenshot()
         guard busy, session == token else { return }
-        let view = SelectionView(snapshot: snapshot)
+        let view = SelectionView(
+          snapshot: snapshot, candidates: SmartSelection.candidates(for: snapshot))
         let window = OverlayWindow(
           contentRect: snapshot.screen.frame, styleMask: .borderless, backing: .buffered,
           defer: false)
@@ -182,6 +193,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
           self?.openEditor(image)
         }
         view.onCopy = { [weak self] image in self?.copyAndDismiss(image) }
+        view.onSave = { [weak self] image in self?.saveAndDismiss(image) }
         view.onCancel = { [weak self] in self?.cancelCapture() }
         view.onLong = { [weak self] rect in self?.beginLong(snapshot: snapshot, rect: rect) }
         overlay = window
@@ -208,7 +220,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     cleanup()
     do {
       try ImageExport.copy(capture.image, pixelsPerPoint: capture.pixelsPerPoint)
-      NSSound.beep()
+      NSSound(named: "Tink")?.play()
       previousApp?.activate(options: [])
       record(
         "quickCopy",
@@ -219,6 +231,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     } catch {
       presentError("复制到剪贴板失败，请重试。\(error.localizedDescription)")
       showHome()
+    }
+  }
+  /// Save straight from the overlay. The panel cannot sit under the status-level
+  /// overlay, so it closes first; a cancelled panel opens the editor so the shot survives.
+  func saveAndDismiss(_ capture: CapturedImage) {
+    cleanup()
+    NSApp.activate(ignoringOtherApps: true)
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.png]
+    panel.nameFieldStringValue = "Ashot-\(Int(Date().timeIntervalSince1970)).png"
+    guard panel.runModal() == .OK, let url = panel.url else {
+      openEditor(capture)
+      return
+    }
+    do {
+      try ImageExport.save(capture.image, pixelsPerPoint: capture.pixelsPerPoint, to: url)
+      previousApp?.activate(options: [])
+    } catch {
+      presentError(error.localizedDescription)
+      openEditor(capture)
     }
   }
   func openEditor(_ capture: CapturedImage) {

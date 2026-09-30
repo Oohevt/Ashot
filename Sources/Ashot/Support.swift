@@ -13,7 +13,11 @@ func record(_ event: String, _ fields: [String: Any] = [:]) {
   guard let evidence = AppPaths.evidence else { return }
   var value = fields
   value["event"] = event
-  value["time"] = ISO8601DateFormatter().string(from: Date())
+  value["time"] = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions.insert(.withFractionalSeconds)
+    return f.string(from: Date())
+  }()
   value["build"] =
     Bundle.main.object(forInfoDictionaryKey: "AshotBuildID") as? String ?? "unidentified"
   do {

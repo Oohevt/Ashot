@@ -89,7 +89,9 @@ public enum VerticalMatcher {
         sameError: same, bestShift: 0, bestError: same, runnerUpShift: -1, runnerUpError: 1,
         verifyError: nil, matched: .unchanged, rejected: nil)
     }
-    let upper = Int(Double(a.height) * 0.75)
+    // A fast flick can move the content most of a frame between samples; keep at
+    // least a tenth of the frame as overlap so those still match.
+    let upper = Int(Double(a.height) * 0.9)
     guard upper > 1 else {
       return MatchReport(
         sameError: same, bestShift: 0, bestError: 1, runnerUpShift: -1, runnerUpError: 1,
