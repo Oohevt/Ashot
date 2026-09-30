@@ -144,6 +144,23 @@ final class LongReceiver: NSObject, SCStreamOutput, @unchecked Sendable {
     return ctx.makeImage()
   }
 }
+/// Non-activating so the scrolled document keeps focus, but able to take keys once clicked:
+/// ⌘W, Esc and the close button all cancel the capture.
+final class LongPanelWindow: NSPanel {
+  var onClose: (() -> Void)?
+  override var canBecomeKey: Bool { true }
+  override func performClose(_ sender: Any?) { onClose?() }
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+      event.charactersIgnoringModifiers == "w"
+    {
+      onClose?()
+      return true
+    }
+    return super.performKeyEquivalent(with: event)
+  }
+  override func cancelOperation(_ sender: Any?) { onClose?() }
+}
 @MainActor
 final class LongCaptureController: NSObject, ObservableObject, SCStreamDelegate {
   let service: CaptureService, snapshot: CaptureSnapshot, rect: CGRect
@@ -167,9 +184,10 @@ final class LongCaptureController: NSObject, ObservableObject, SCStreamDelegate 
     self.rect = rect
   }
   func start() {
-    let p = NSPanel(
+    let p = LongPanelWindow(
       contentRect: CGRect(x: 0, y: 0, width: 300, height: 530),
-      styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+      styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
+    p.onClose = { [weak self] in self?.cancel() }
     p.title = "Ashot · 长截图"
     p.level = .floating
     p.isReleasedWhenClosed = false

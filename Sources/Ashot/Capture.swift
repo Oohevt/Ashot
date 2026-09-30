@@ -31,11 +31,25 @@ final class CaptureService {
         $0.owningApplication?.processID == ProcessInfo.processInfo.processIdentifier
       })
   }
-  func screenshot() async throws -> CaptureSnapshot {
+  /// One frozen snapshot per connected display, the display under the mouse first.
+  /// A display that cannot be captured is skipped; none captured throws.
+  func screenshots() async throws -> [CaptureSnapshot] {
     let content = try await self.content()
     let mouse = NSEvent.mouseLocation
-    let screen =
-      NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main!
+    let screens = NSScreen.screens.sorted { lhs, _ in NSMouseInRect(mouse, lhs.frame, false) }
+    var result: [CaptureSnapshot] = []
+    var firstError: Error?
+    for screen in screens {
+      do { result.append(try await capture(screen, content: content)) } catch {
+        firstError = firstError ?? error
+      }
+    }
+    if result.isEmpty { throw firstError ?? CocoaError(.coderInvalidValue) }
+    return result
+  }
+  private func capture(_ screen: NSScreen, content: SCShareableContent) async throws
+    -> CaptureSnapshot
+  {
     let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as! NSNumber)
       .uint32Value
     guard let display = content.displays.first(where: { $0.displayID == id }) else {
@@ -63,6 +77,8 @@ final class SelectionView: NSView {
   var onSave: ((CapturedImage) -> Void)?
   var onLong: ((CGRect) -> Void)?
   var onCancel: (() -> Void)?
+  /// Fired when a press starts a new selection here, so other displays drop theirs.
+  var onBegin: (() -> Void)?
   var start: CGPoint?
   var selection: CGRect?
   var toolbar: NSView?
@@ -167,14 +183,22 @@ final class SelectionView: NSView {
       adjust = (handle, p, selection)
       return
     }
-    toolbar?.removeFromSuperview()
-    toolbar = nil
-    sizeLabel?.removeFromSuperview()
-    sizeLabel = nil
+    onBegin?()
+    clearSelection()
     start = p
     downCandidate = SmartSelectionGeometry.pick(at: p, candidates: candidates)
     hover = nil
     selection = nil
+    needsDisplay = true
+  }
+  /// Drops the selection and its chrome; used when another display takes over.
+  func clearSelection() {
+    toolbar?.removeFromSuperview()
+    toolbar = nil
+    sizeLabel?.removeFromSuperview()
+    sizeLabel = nil
+    selection = nil
+    adjust = nil
     needsDisplay = true
   }
   override func mouseMoved(with event: NSEvent) {

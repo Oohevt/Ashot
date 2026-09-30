@@ -20,7 +20,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var status: NSStatusItem!
   var home: NSWindow!
   var settingsWindow: NSWindow?
-  var overlay: NSWindow?
+  var overlays: [OverlayWindow] = []
   var editors: [NSWindow] = []
   var hotKey: HotKey!
   var busy = false
@@ -146,8 +146,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     record("settingsOpen")
   }
   func cleanup() {
-    overlay?.close()
-    overlay = nil
+    overlays.forEach { $0.close() }
+    overlays = []
     busy = false
     session = UUID()
     record(
@@ -175,31 +175,47 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     record("captureStart")
     Task { [self] in
       do {
-        let snapshot = try await captureService.screenshot()
+        let snapshots = try await captureService.screenshots()
         guard busy, session == token else { return }
-        let view = SelectionView(
-          snapshot: snapshot, candidates: SmartSelection.candidates(for: snapshot))
-        let window = OverlayWindow(
-          contentRect: snapshot.screen.frame, styleMask: .borderless, backing: .buffered,
-          defer: false)
-        window.backgroundColor = .clear
-        window.isOpaque = true
-        window.level = .statusBar
-        window.contentView = view
-        window.isReleasedWhenClosed = false
-        view.onCapture = { [weak self] image in
-          self?.cleanup()
-          self?.openEditor(image)
+        var views: [SelectionView] = []
+        for snapshot in snapshots {
+          let view = SelectionView(
+            snapshot: snapshot, candidates: SmartSelection.candidates(for: snapshot))
+          let window = OverlayWindow(
+            contentRect: snapshot.screen.frame, styleMask: .borderless, backing: .buffered,
+            defer: false)
+          window.backgroundColor = .clear
+          window.isOpaque = true
+          window.level = .statusBar
+          window.contentView = view
+          window.isReleasedWhenClosed = false
+          view.onCapture = { [weak self] image in
+            self?.cleanup()
+            self?.openEditor(image)
+          }
+          view.onCopy = { [weak self] image in self?.copyAndDismiss(image) }
+          view.onSave = { [weak self] image in self?.saveAndDismiss(image) }
+          view.onCancel = { [weak self] in self?.cancelCapture() }
+          view.onLong = { [weak self] rect in self?.beginLong(snapshot: snapshot, rect: rect) }
+          overlays.append(window)
+          views.append(view)
         }
-        view.onCopy = { [weak self] image in self?.copyAndDismiss(image) }
-        view.onSave = { [weak self] image in self?.saveAndDismiss(image) }
-        view.onCancel = { [weak self] in self?.cancelCapture() }
-        view.onLong = { [weak self] rect in self?.beginLong(snapshot: snapshot, rect: rect) }
-        overlay = window
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(view)
+        // One selection at a time: pressing on a display clears the others.
+        for view in views {
+          view.onBegin = { [weak view] in views.filter { $0 !== view }.forEach { $0.clearSelection() } }
+        }
+        // The display under the mouse is key first; a press on another display
+        // makes that overlay key (acceptsFirstMouse), so keys follow the pointer.
+        overlays.dropFirst().forEach { $0.orderFront(nil) }
+        overlays[0].makeKeyAndOrderFront(nil)
+        overlays[0].makeFirstResponder(views[0])
         NSApp.activate(ignoringOtherApps: true)
-        record("overlayReady", ["width": snapshot.image.width, "height": snapshot.image.height])
+        record(
+          "overlayReady",
+          [
+            "width": snapshots[0].image.width, "height": snapshots[0].image.height,
+            "displays": snapshots.count,
+          ])
       } catch {
         guard session == token else { return }
         cleanup()
