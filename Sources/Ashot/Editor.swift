@@ -14,6 +14,10 @@ final class EditorModel: ObservableObject {
   @Published var message = "拖动绘制；选择工具可移动或调整标注"
   @Published var color: AnnotationColor = .red
   @Published var lineWidth: Double = 4
+  /// Adjacent keys, in toolbar order: rectangle, arrow, text, mosaic.
+  static let toolKeys: [(key: String, kind: AnnotationKind)] = [
+    ("q", .rectangle), ("w", .arrow), ("e", .text), ("r", .mosaic),
+  ]
   /// Set by the canvas: opens an in-place text field. Nil until a canvas exists.
   var textEditor: ((UUID?, CGPoint) -> Void)?
   init(
@@ -125,7 +129,9 @@ struct EditorRoot: View {
         HStack(spacing: 2) {
           toolButton("选择", "cursorarrow", nil)
           ForEach(AnnotationKind.allCases, id: \.self) { kind in
-            toolButton(title(kind), symbol(kind), kind)
+            toolButton(
+              title(kind) + "  " + (EditorModel.toolKeys.first { $0.kind == kind }?.key.uppercased() ?? ""),
+              symbol(kind), kind)
           }
         }
         Divider().frame(height: 20)
@@ -229,7 +235,10 @@ struct CanvasHost: NSViewRepresentable {
     let scroll = NSScrollView()
     scroll.hasVerticalScroller = true
     scroll.hasHorizontalScroller = true
-    scroll.documentView = CanvasView(model: model)
+    let canvas = CanvasView(model: model)
+    scroll.documentView = canvas
+    // Tool keys are handled by the canvas, so it must hold focus from the start.
+    DispatchQueue.main.async { scroll.window?.makeFirstResponder(canvas) }
     return scroll
   }
   func updateNSView(_ scroll: NSScrollView, context: Context) {
@@ -291,6 +300,16 @@ final class CanvasView: NSView, NSTextFieldDelegate {
       ctx.fill(CGRect(x: a.endX - 6, y: a.endY - 6, width: 12, height: 12))
     }
     ctx.restoreGState()
+  }
+  override func keyDown(with event: NSEvent) {
+    if event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+      let typed = event.charactersIgnoringModifiers?.lowercased(),
+      let match = EditorModel.toolKeys.first(where: { $0.key == typed })
+    {
+      model.tool = match.kind
+    } else {
+      super.keyDown(with: event)
+    }
   }
   // MARK: In-place text
   func beginText(_ id: UUID?, at point: CGPoint) {

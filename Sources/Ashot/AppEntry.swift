@@ -22,6 +22,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var settingsWindow: NSWindow?
   var overlays: [OverlayWindow] = []
   var editors: [NSWindow] = []
+  var pins: [PinWindow] = []
   var hotKey: HotKey!
   var busy = false
   var session = UUID()
@@ -155,7 +156,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ["visibleOverlayCount": NSApp.windows.filter { $0 is OverlayWindow && $0.isVisible }.count])
   }
   func windowWillClose(_ notification: Notification) {
-    if let window = notification.object as? NSWindow { editors.removeAll { $0 === window } }
+    if let window = notification.object as? NSWindow {
+      editors.removeAll { $0 === window }
+      pins.removeAll { $0 === window }
+    }
   }
   func requestScreenAccess() {
     let accepted = CGRequestScreenCaptureAccess()
@@ -195,6 +199,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
           }
           view.onCopy = { [weak self] image in self?.copyAndDismiss(image) }
           view.onSave = { [weak self] image in self?.saveAndDismiss(image) }
+          view.onPin = { [weak self] image, frame in self?.pin(image, frame: frame) }
           view.onCancel = { [weak self] in self?.cancelCapture() }
           view.onLong = { [weak self] rect in self?.beginLong(snapshot: snapshot, rect: rect) }
           overlays.append(window)
@@ -267,6 +272,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
       presentError(error.localizedDescription)
       openEditor(capture)
     }
+  }
+  /// Floats the selection where it was taken; the source app gets focus back.
+  func pin(_ capture: CapturedImage, frame: CGRect) {
+    cleanup()
+    let window = PinWindow(capture: capture, frame: frame)
+    window.delegate = self
+    pins.append(window)
+    window.orderFrontRegardless()
+    previousApp?.activate(options: [])
+    record("pin", ["width": frame.width, "height": frame.height])
   }
   func openEditor(_ capture: CapturedImage) {
     let image = capture.image

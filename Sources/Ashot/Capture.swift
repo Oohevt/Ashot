@@ -75,6 +75,8 @@ final class SelectionView: NSView {
   var onCapture: ((CapturedImage) -> Void)?
   var onCopy: ((CapturedImage) -> Void)?
   var onSave: ((CapturedImage) -> Void)?
+  /// Image plus the selection's frame in global AppKit screen coordinates.
+  var onPin: ((CapturedImage, CGRect) -> Void)?
   var onLong: ((CGRect) -> Void)?
   var onCancel: (() -> Void)?
   /// Fired when a press starts a new selection here, so other displays drop theirs.
@@ -324,6 +326,7 @@ final class SelectionView: NSView {
     let stack = NSStackView(views: [
       iconButton("doc.on.doc", "复制  W", #selector(copySelection)),
       iconButton("square.and.arrow.down", "保存  ⌘S", #selector(saveSelection)),
+      iconButton("pin", "贴图  P", #selector(pinSelection)),
       iconButton("pencil.tip.crop.circle", "编辑标注  ↩", #selector(capture), label: "编辑"),
       iconButton("arrow.down.to.line.compact", "长截图：框选可滚动内容后，缓慢向下滚动", #selector(longCapture), label: "长截图"),
       divider,
@@ -376,6 +379,8 @@ final class SelectionView: NSView {
       capture()
     } else if event.keyCode == UInt16(kVK_ANSI_W) {
       copySelection()
+    } else if event.keyCode == UInt16(kVK_ANSI_P) {
+      pinSelection()
     } else if event.keyCode == UInt16(kVK_ANSI_S), event.modifierFlags.contains(.command) {
       saveSelection()
     } else {
@@ -394,6 +399,15 @@ final class SelectionView: NSView {
   @objc func capture() { if let image = croppedSelection() { onCapture?(image) } }
   /// Confirms without opening the editor: copy to the pasteboard and return focus.
   @objc func copySelection() { if let image = croppedSelection() { onCopy?(image) } }
+  @objc func pinSelection() {
+    guard let selection, let image = croppedSelection() else { return }
+    let screen = snapshot.screen.frame
+    onPin?(
+      image,
+      CGRect(
+        x: screen.minX + selection.minX, y: screen.maxY - selection.maxY,
+        width: selection.width, height: selection.height))
+  }
   @objc func saveSelection() { if let image = croppedSelection() { onSave?(image) } }
   @objc func longCapture() { if let selection { onLong?(selection) } }
   @objc func cancel() { onCancel?() }
