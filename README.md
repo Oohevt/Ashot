@@ -4,6 +4,8 @@ macOS 原生截图工具，当前开发中。默认快捷键 `⌥ A`，可在主
 
 构建：`./script/build_and_run.sh --build-only`。运行 `dist/Ashot.app` 或执行 `./script/build_and_run.sh run`。构建后若没有实例在运行，会自动把 `dist/Ashot.app` 同步到 `/Applications/Ashot.app`（开机自启的登录项指向那里）；有实例在跑时跳过同步。
 
+发布构建：`./script/build_and_run.sh --release`。优化编译，成品在 `dist/release/Ashot.app`，不含开发用的日志注入（`AshotBuildID` / `AshotWorkspaceRoot`），运行时不会往工程目录写日志；构建后会校验签名和注入键，并复制一份到桌面 `Ashot-<MMDD-HHMM>.app`（桌面只保留最新一份，只删符合这个命名的旧副本）。发布版和开发版同一个 Bundle ID，新启动的会顶掉旧的，不会同时运行。
+
 本地构建使用已配置的 Apple Development 证书，指纹存放在 `config/signing-identity.txt`（仅公开证书标识，不含私钥）。固定签名身份让重新构建后的屏幕授权能匹配同一应用；已实测确认换构建后授权仍然有效。没有证书时构建会报错。
 
 如果授权是在临时（ad hoc）签名时期给的，系统会把授权钉死在那一个二进制的 cdhash 上，之后无论怎么重新构建、怎么在系统设置里点开关都会一直提示权限不足。此时需要先执行 `tccutil reset ScreenCapture com.oohevt.Ashot` 清掉旧记录，重新构建并启动，再授权一次。判断依据：`/Library/Application Support/com.apple.TCC/TCC.db` 中该条目的 `length(csreq)` 为 40 表示被 cdhash 钉死，约 160 表示绑定的是证书要求。
