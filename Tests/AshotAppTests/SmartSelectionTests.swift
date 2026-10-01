@@ -229,4 +229,81 @@ final class SmartSelectionAppTests: XCTestCase {
       "drag fallback produced \(String(describing: view.selection))")
     XCTAssertNil(view.toolbar)
   }
+
+  // MARK: - Adjusting a locked selection, multi-display hooks, pinning
+
+  @MainActor private func lockedView() async throws -> (SelectionView, CGRect) {
+    let rect = CGRect(x: 640, y: 482, width: 320, height: 178)
+    let view = try await makeView(
+      candidates: [SelectionCandidate(rect: rect, kind: .window, precedence: 0)])
+    mouse(view, .leftMouseDown, CGPoint(x: rect.midX, y: rect.midY))
+    mouse(view, .leftMouseUp, CGPoint(x: rect.midX, y: rect.midY))
+    XCTAssertEqual(view.selection, rect)
+    return (view, rect)
+  }
+  @MainActor func testDraggingACornerResizesTheLockedSelection() async throws {
+    let (view, rect) = try await lockedView()
+    mouse(view, .leftMouseDown, CGPoint(x: rect.maxX, y: rect.maxY))
+    mouse(view, .leftMouseDragged, CGPoint(x: rect.maxX + 40, y: rect.maxY + 30))
+    mouse(view, .leftMouseUp, CGPoint(x: rect.maxX + 40, y: rect.maxY + 30))
+    XCTAssertEqual(
+      view.selection, CGRect(x: rect.minX, y: rect.minY, width: 360, height: 208))
+    XCTAssertNotNil(view.toolbar, "toolbar comes back after the adjustment")
+  }
+  @MainActor func testDraggingInsideMovesTheLockedSelection() async throws {
+    let (view, rect) = try await lockedView()
+    mouse(view, .leftMouseDown, CGPoint(x: rect.midX, y: rect.midY))
+    mouse(view, .leftMouseDragged, CGPoint(x: rect.midX + 25, y: rect.midY - 15))
+    mouse(view, .leftMouseUp, CGPoint(x: rect.midX + 25, y: rect.midY - 15))
+    XCTAssertEqual(view.selection, rect.offsetBy(dx: 25, dy: -15))
+  }
+  @MainActor func testPressingOutsideTheSelectionStartsOver() async throws {
+    let (view, _) = try await lockedView()
+    mouse(view, .leftMouseDown, CGPoint(x: 100, y: 100))
+    XCTAssertNil(view.selection)
+    XCTAssertNil(view.toolbar)
+  }
+  @MainActor func testNewSelectionNotifiesOtherDisplaysAndClearSelectionDropsChrome() async throws
+  {
+    let (view, rect) = try await lockedView()
+    var began = 0
+    view.onBegin = { began += 1 }
+    mouse(view, .leftMouseDown, CGPoint(x: 10, y: 10))
+    XCTAssertEqual(began, 1)
+    // Adjusting an existing selection is not "starting over" and must not notify.
+    mouse(view, .leftMouseUp, CGPoint(x: 10, y: 10))
+    let (other, _) = try await lockedView()
+    other.onBegin = { began += 1 }
+    mouse(other, .leftMouseDown, CGPoint(x: rect.midX, y: rect.midY))
+    mouse(other, .leftMouseUp, CGPoint(x: rect.midX, y: rect.midY))
+    XCTAssertEqual(began, 1)
+    other.clearSelection()
+    XCTAssertNil(other.selection)
+    XCTAssertNil(other.toolbar)
+    XCTAssertNil(other.sizeLabel)
+  }
+  @MainActor func testScreenshotsCoverEveryScreenWithTheMouseScreenFirst() async throws {
+    let shots = try await CaptureService().screenshots()
+    XCTAssertEqual(shots.count, NSScreen.screens.count)
+    let mouse = NSEvent.mouseLocation
+    XCTAssertTrue(NSMouseInRect(mouse, shots[0].screen.frame, false))
+    for shot in shots {
+      XCTAssertEqual(shot.screen.frame.size, shot.display.frame.size)
+      XCTAssertGreaterThan(shot.image.width, 0)
+    }
+  }
+  @MainActor func testPinReceivesTheSelectionInGlobalScreenCoordinates() async throws {
+    let (view, rect) = try await lockedView()
+    var pinned: (CapturedImage, CGRect)?
+    view.onPin = { pinned = ($0, $1) }
+    view.pinSelection()
+    let (image, frame) = try XCTUnwrap(pinned)
+    let screen = view.snapshot.screen.frame
+    XCTAssertEqual(frame.width, rect.width)
+    XCTAssertEqual(frame.height, rect.height)
+    XCTAssertEqual(frame.minX, screen.minX + rect.minX)
+    // View space is y-down; AppKit screen space is y-up.
+    XCTAssertEqual(frame.maxY, screen.maxY - rect.minY)
+    XCTAssertEqual(image.image.width, 640)
+  }
 }
